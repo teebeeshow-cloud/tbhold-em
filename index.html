@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>The Beyond Show - Texas Hold'em</title>
+    <style>
+        body { background: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        h1 { color: #38bdf8; margin-bottom: 5px; text-transform: uppercase; font-size: 1.5rem; letter-spacing: 2px; }
+        .subtitle { color: #94a3b8; font-size: 0.9rem; margin-bottom: 20px; }
+        
+        #auth-box, #table-container { background: #1e293b; padding: 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); width: 100%; max-width: 600px; box-sizing: border-box; }
+        .hidden { display: none !important; }
+        
+        input, button { padding: 10px 15px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 1rem; margin-top: 10px; width: 100%; box-sizing: border-box; }
+        button { background: #0284c7; border: none; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #0369a1; }
+        button.danger { background: #dc2626; }
+        button.danger:hover { background: #b91c1c; }
+        button.success { background: #16a34a; }
+        button.success:hover { background: #15803d; }
+
+        .table-felt { background: #065f46; border: 8px solid #047857; border-radius: 150px; padding: 30px; min-height: 300px; display: flex; flex-direction: column; justify-content: space-between; align-items: center; position: relative; margin-top: 20px; box-shadow: inset 0 0 40px rgba(0,0,0,0.6); }
+        .pot-display { background: rgba(0,0,0,0.6); padding: 8px 16px; border-radius: 20px; font-weight: bold; color: #facc15; font-size: 1.1rem; }
+        .community-cards { display: flex; gap: 8px; }
+        
+        .card { background: #fff; color: #000; width: 35px; height: 50px; border-radius: 4px; display: flex; justify-content: center; align-items: center; font-weight: bold; font-size: 0.9rem; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+        .card.H, .card.D { color: #dc2626; } /* Coeurs et carreaux en rouge */
+
+        .actions-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
+        .status-log { background: #0f172a; padding: 10px; border-radius: 6px; font-size: 0.9rem; color: #38bdf8; text-align: center; margin-bottom: 15px; border: 1px solid #334155; }
+        .my-hand { display: flex; gap: 10px; justify-content: center; margin: 15px 0; }
+        .player-info { font-size: 0.85rem; color: #cbd5e1; margin-top: 5px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h1>TB Poker Hold'em</h1>
+    <div class="subtitle">The Beyond Show - Interactivité Live</div>
+
+    <!-- ÉTAPE D'AUTHENTIFICATION RAPIDE -->
+    <div id="auth-box">
+        <h3>Connexion Joueur</h3>
+        <p style="font-size: 0.85rem; color: #94a3b8;">Entrez votre UID Firebase et votre pseudo pour vous asseoir (Buy-in : 500 TB-Coins).</p>
+        <input type="text" id="uid-input" placeholder="Votre UID Firebase (ex: user_xyz...)">
+        <input type="text" id="username-input" placeholder="Votre Pseudo Twitch / Kick / YouTube">
+        <button onclick="joinTable()">S'asseoir à la table (500 Coins)</button>
+    </div>
+
+    <!-- PLATEAU DE JEU -->
+    <div id="table-container" class="hidden">
+        <div class="status-log" id="log-msg">En attente de joueurs...</div>
+        
+        <div class="table-felt">
+            <div class="pot-display">Pot : <span id="pot-val">0</span> TB-Coins</div>
+            <div class="community-cards" id="community-box">
+                <!-- Cartes communes générées dynamiquement -->
+            </div>
+            <div class="player-info" id="table-players-info">Chargement des joueurs...</div>
+        </div>
+
+        <div style="text-align: center; margin-top: 15px; font-size: 0.9rem; color: #facc15;">Vos cartes privées :</div>
+        <div class="my-hand" id="my-cards-box">
+            <div class="card">-</div><div class="card">-</div>
+        </div>
+
+        <div class="actions-bar" id="controls-box">
+            <button class="danger" onclick="sendAction('fold')">Se coucher</button>
+            <button class="success" onclick="sendAction('call')">Parole / Suivre</button>
+            <button onclick="sendAction('raise')">Relancer (+20)</button>
+        </div>
+
+        <button style="margin-top: 20px; background: #334155;" onclick="startHand()">[Admin] Lancer la main</button>
+    </div>
+
+    <!-- Firebase SDK Compat -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script>
+        // CONFIGURATION FIREBASE (Remplacez par vos identifiants du projet tb-holdem)
+        const firebaseConfig = {
+            databaseURL: "https://tb-holdem-default-rtdb.europe-west1.firebasedatabase.app"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        const WORKER_URL = "https://tb-poker-dealer.teebeeshow.workers.dev";
+        let myUid = "";
+        let myUsername = "";
+        const tableId = "table_1";
+
+        function joinTable() {
+            myUid = document.getElementById("uid-input").value.trim();
+            myUsername = document.getElementById("username-input").value.trim();
+            if(!myUid || !myUsername) return alert("Remplissez tous les champs !");
+
+            fetch(`${WORKER_URL}/join`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uid: myUid, username: myUsername, tableId })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.error) alert(data.error);
+                else {
+                    document.getElementById("auth-box").classList.add("hidden");
+                    document.getElementById("table-container").classList.remove("hidden");
+                    initListeners();
+                }
+            })
+            .catch(err => alert("Erreur réseau : " + err));
+        }
+
+        function initListeners() {
+            // Écoute de la table publique
+            db.ref(`poker_public/${tableId}`).on("value", snapshot => {
+                const data = snapshot.val();
+                if(!data) return;
+
+                document.getElementById("pot-val").innerText = data.pot || 0;
+                document.getElementById("log-msg").innerText = data.lastAction || "Partie en cours...";
+
+                // Affichage cartes communes
+                const commBox = document.getElementById("community-box");
+                commBox.innerHTML = "";
+                if(data.communityCards) {
+                    data.communityCards.forEach(c => {
+                        commBox.innerHTML += `<div class="card ${c[1]}">${c[0]}${c[1]}</div>`;
+                    });
+                }
+
+                // Infos joueurs
+                let infoTxt = "";
+                if(data.players) {
+                    Object.entries(data.players).forEach(([id, p]) => {
+                        const isTurn = data.turnUid === id ? "👉 [TOUR]" : "";
+                        infoTxt += `${p.username} (${p.chips} jetons) - Mise: ${p.bet} ${p.folded ? '[couché]' : ''} ${isTurn} | `;
+                    });
+                }
+                document.getElementById("table-players-info").innerText = infoTxt;
+
+                // Activer ou griser les boutons selon si c'est notre tour
+                const isMyTurn = data.turnUid === myUid;
+                document.getElementById("controls-box").style.opacity = isMyTurn ? "1" : "0.4";
+            });
+
+            // Écoute des cartes privées sécurisées du joueur
+            db.ref(`poker_private/${tableId}/${myUid}`).on("value", snapshot => {
+                const data = snapshot.val();
+                const handBox = document.getElementById("my-cards-box");
+                handBox.innerHTML = "";
+                if(data && data.cards) {
+                    data.cards.forEach(c => {
+                        handBox.innerHTML += `<div class="card ${c[1]}">${c[0]}${c[1]}</div>`;
+                    });
+                } else {
+                    handBox.innerHTML = `<div class="card">-</div><div class="card">-</div>`;
+                }
+            });
+        }
+
+        function sendAction(action) {
+            let amount = 0;
+            if(action === 'raise') {
+                amount = prompt("Montant total de la relance :", "40");
+                if(!amount) return;
+            }
+            fetch(`${WORKER_URL}/action`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ uid: myUid, tableId, action, amount: Number(amount) })
+            }).then(res => res.json()).then(data => {
+                if(data.error) alert(data.error);
+            });
+        }
+
+        function startHand() {
+            fetch(`${WORKER_URL}/start`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ tableId })
+            }).then(res => res.json()).then(data => {
+                if(data.error) alert(data.error);
+            });
+        }
+    </script>
+</body>
+</html>
